@@ -1,125 +1,157 @@
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit_aer import AerSimulator
-from qiskit_aer.noise import NoiseModel, depolarizing_error, thermal_relaxation_error
-from qiskit.quantum_info import Statevector, state_fidelity
+from qiskit.quantum_info import state_fidelity
 from qiskit.visualization import plot_histogram
+from qiskit_aer.noise import NoiseModel
+from qiskit_aer.noise import NoiseModel, thermal_relaxation_error, depolarizing_error, pauli_error,amplitude_damping_error
+
+from utils.ibm_lab_util import build_qc  # Assuming build_qc is defined in this module
+
 import matplotlib.pyplot as plt
-
-from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
-from qiskit.circuit import Qubit, Clbit
-from utils.ibm_lab_util import build_qc
-
-
-qr = QuantumRegister(3, name="q")
-cr = ClassicalRegister(3, name="c")
-
-
-teleportation_circuit = build_qc(qr, cr)
-s, a, b = qr
-c0, c1, c2 = cr
-teleportation_circuit.measure(b, c2)
-teleportation_circuit.draw("mpl")
-
-
+import time
 import math
 
-teleport_superposition_circuit: QuantumCircuit
+# -------------------------
+# Step 1: Define the Teleportation Circuit
+# -------------------------
+
+# def build_qc(qr, cr):
+#     qc = QuantumCircuit(qr, cr)
+#     s, a, b = qr
+
+#     # Create Bell pair between a and b
+#     qc.h(a)
+#     qc.cx(a, b)
+
+#     # Bell measurement on s and a
+#     qc.cx(s, a)
+#     qc.h(s)
+
+#     qc.barrier()
+
+#     # Measurements and corrections
+#     qc.measure(s, cr[0])
+#     qc.measure(a, cr[1])
+#     qc.cx(a, b)
+#     qc.cz(s, b)
+
+#     return qc
 
 
-# Create a circuit that has the same structure as our teleportation circuit
-state_prep = QuantumCircuit(qr, cr)
+def init_qc():
+    qr = QuantumRegister(3, name="q")
+    cr = ClassicalRegister(3, name="c")
 
-# Prepare the qubit
-state_prep.rx(math.pi / 4, s)
+    teleportation_circuit = build_qc(qr, cr)
+    s, a, b = qr
 
-# Put a barrier across all of the wires
-state_prep.barrier()
-# Add the teleportation circuit to the superposition circuit
-teleport_superposition_circuit = state_prep.compose(teleportation_circuit)
+    # Prepare input state
+    state_prep = QuantumCircuit(qr, cr)
+    state_prep.rx(math.pi / 4, s)
+    state_prep.barrier()
 
-teleport_superposition_circuit.draw("mpl", cregbundle=False)
+    # Combine circuits
+    full_circuit = state_prep.compose(teleportation_circuit)
 
+    return full_circuit, qr, cr, b
 
+# -------------------------
+# Step 2: Setup
+# -------------------------
 
-
-# -------------------------------
-# Step 2: Build Noise Model
-# -------------------------------
 noise_model = NoiseModel()
 
-# Define depolarizing noise
-prob_1q = 0.01
-prob_2q = 0.02
-error_1q = depolarizing_error(prob_1q, 1)
-error_2q = depolarizing_error(prob_2q, 2)
+# Add depolarizing error with 5% probability for all single qubit gates (u1, u2, u3)
+depol_error = depolarizing_error(0.05, 1)
+noise_model.add_all_qubit_quantum_error(depol_error, ['u1', 'u2', 'u3'])
 
-# Add depolarizing noise to gates
-noise_model.add_all_qubit_quantum_error(error_1q, ['h', 'rz', 'x', 'z'])
-noise_model.add_all_qubit_quantum_error(error_2q, ['cx'])
+# Add thermal relaxation error (relaxation and dephasing model) ONLY to single-qubit gates
+thermal_error = thermal_relaxation_error(0.1, 0.1, 1)  # 10% error probability for relaxation and dephasing
+noise_model.add_all_qubit_quantum_error(thermal_error, ['h', 'x', 'z'])  # Apply to single qubit gates
 
-# Add thermal relaxation noise
-T1 = 50     # μs
-T2 = 30     # μs
-gate_time = 0.1  # μs
-thermal = thermal_relaxation_error(T1, T2, gate_time)
-noise_model.add_all_qubit_quantum_error(thermal, ['h', 'x', 'rz'])
+# Add depolarizing error to the 2-qubit gates (such as cx)
+depol_2qubit_error = depolarizing_error(0.05, 2)  # 5% depolarizing error on 2-qubit gates
+noise_model.add_all_qubit_quantum_error(depol_2qubit_error, ['cx'])
 
-# -------------------------------
-# Step 3: Simulate with Noise
-# -------------------------------
-simulator = AerSimulator(noise_model=noise_model)
-compiled = transpile(teleportation_circuit, simulator)
-result = simulator.run(compiled, shots=1024).result()
+# Add amplitude damping (relaxation error) to simulate energy loss for single-qubit gates
+amplitude_damping = amplitude_damping_error(0.1)  # 10% chance of relaxation
+noise_model.add_all_qubit_quantum_error(amplitude_damping, ['x', 'z'])
+
+
+# Initialize circuit
+teleport_circuit, qr, cr, b = init_qc()
+
+# Create simulators
+ideal_sim = AerSimulator(method="statevector")
+noisy_sim = AerSimulator(noise_model=noise_model, method="statevector")
+
+# Save statevectors
+ideal_circuit = teleport_circuit.copy()
+ideal_circuit.save_statevector()
+
+noisy_circuit = transpile(teleport_circuit, noisy_sim)
+noisy_circuit.save_statevector()
+
+# -------------------------
+# Step 3: Fidelity
+# -------------------------
+
+# Run ideal simulation
+ideal_result = ideal_sim.run(ideal_circuit).result()
+ideal_sv = ideal_result.get_statevector()
+
+# Run noisy simulation
+noisy_result = noisy_sim.run(noisy_circuit).result()
+noisy_sv = noisy_result.get_statevector()
+
+# fidelity = state_fidelity(ideal_sv, noisy_sv)
+# print(f"Quantum Fidelity: {fidelity:.4f}")
+
+# print(ideal_sv)
+# print(noisy_sv)
+
+from qiskit.quantum_info import Statevector, partial_trace
+
+# Get statevectors
+ideal_sv = Statevector(ideal_result.get_statevector())
+noisy_sv = Statevector(noisy_result.get_statevector())
+
+# Qubits: s=0, a=1, b=2
+# We want to compare only the state of qubit b (index 2)
+
+# Trace out qubits s (0) and a (1), leaving only qubit b (2)
+ideal_b = partial_trace(ideal_sv, [0, 1])
+noisy_b = partial_trace(noisy_sv, [0, 1])
+
+# Now compute fidelity of just qubit b
+fidelity = state_fidelity(ideal_b, noisy_b)
+print(f"Quantum Fidelity (qubit b only): {fidelity:.4f}")
+
+
+# -------------------------
+# Step 4: Latency and Throughput (Measurement-Based)
+# -------------------------
+
+# Add measurement and run multiple shots
+shots = 1000
+measured_circuit = teleport_circuit.copy()
+measured_circuit.measure_all()
+
+start = time.time()
+result = noisy_sim.run(measured_circuit, shots=shots).result()
+end = time.time()
+
+latency = end - start
+throughput = shots / latency
+
+print(f"Quantum Latency (sec): {latency:.4f}")
+print(f"Quantum Throughput (qubits/sec): {throughput:.2f}")
+
+# -------------------------
+# Step 5: Visualization
+# -------------------------
+
 counts = result.get_counts()
-
-# -------------------------------
-# Step 4: Fidelity Calculation
-# -------------------------------
-# Get the ideal output state (no noise)
-ideal_sim = AerSimulator()
-compiled_ideal = transpile(teleportation_circuit, ideal_sim)
-ideal_result = ideal_sim.run(compiled_ideal).result()
-ideal_state = Statevector.from_int(0, dims=(2, 2))  # |00>
-
-# For actual fidelity comparison, we expect teleportation to yield |ψ> on Bob’s qubit.
-# Since our circuit measures both qubits, we simulate the initial prepared state.
-prepared_state = Statevector.from_instruction(teleportation_circuit.remove_final_measurements(inplace=False))
-
-# Fidelity between ideal |00> and final prepared state
-fidelity = state_fidelity(ideal_state, prepared_state)
-print(f"Fidelity of teleportation: {fidelity:.4f}")
-
-# -------------------------------
-# Step 5: Latency and Throughput
-# -------------------------------
-gate_times = {
-    'h': 0.1,
-    'rz': 0.1,
-    'cx': 0.5,
-    'x': 0.1,
-    'z': 0.1,
-    'measure': 0.2
-}
-
-# Estimate total latency in microseconds
-latency_us = (
-    gate_times['h'] +
-    gate_times['rz'] +
-    gate_times['cx'] +
-    gate_times['h'] +
-    gate_times['measure'] * 2 +  # measuring two qubits
-    gate_times['x'] +
-    gate_times['z']
-)
-print(f"Estimated quantum latency: {latency_us:.2f} μs")
-
-# Define throughput (successful ops/sec) using fidelity threshold
-success = 1 if fidelity > 0.9 else 0
-throughput = success / (latency_us * 1e-6)  # ops per second
-print(f"Estimated quantum throughput: {throughput:.2f} ops/sec")
-
-# -------------------------------
-# Step 6: Visualize Results
-# -------------------------------
-plot_histogram(counts, title="Teleportation with Noise")
+plot_histogram(counts)
+plt.title("Teleportation Measurement Results (Noisy Simulation)")
 plt.show()
