@@ -98,11 +98,10 @@ noisy_circuit.save_statevector()
 
 # Run ideal simulation
 ideal_result = ideal_sim.run(ideal_circuit).result()
-ideal_sv = ideal_result.get_statevector()
+
 
 # Run noisy simulation
 noisy_result = noisy_sim.run(noisy_circuit).result()
-noisy_sv = noisy_result.get_statevector()
 
 # fidelity = state_fidelity(ideal_sv, noisy_sv)
 # print(f"Quantum Fidelity: {fidelity:.4f}")
